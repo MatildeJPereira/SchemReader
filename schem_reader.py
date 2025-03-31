@@ -2,47 +2,50 @@ import sys
 
 import nbtlib
 import pygame as pygame
-from colors import BlOCK_COLORS_FROM_NAMES
+from colors import BlOCK_COLORS_FROM_NAMES, BlOCK_COLORS
 import re
 
+from names import BLOCK_NAMES
+
 RULER_SIZE = 40
-BLOCK_SIZE = 20
+BLOCK_SIZE = 5
 
 
 def load_schem(file_path):
+    # Load the schematic data as nbt
     nbt_data = nbtlib.load(file_path)
+
+    # try to get Schematic from the data, for certain .schem versions
     try:
         nbt_data = nbt_data['Schematic']
     except KeyError:
         print("This file is not weird!")
 
-    version = nbt_data['Version']
     width = nbt_data['Width']
     height = nbt_data['Height']
     length = nbt_data['Length']
-    if version == 2:
-        block_data = nbt_data['BlockData']
-        palette = nbt_data['Palette']
+
+    if '.schematic' in file_path:
+        blocks = list(nbt_data['Blocks'])
+    else:
+        version = nbt_data['Version']
+        if version == 2:
+            block_data = nbt_data['BlockData']
+            palette = nbt_data['Palette']
+
+        if version == 3:
+            blocks = nbt_data['Blocks']     # Palette and Data are in Blocks
+            palette = blocks['Palette']
+            block_data = blocks['Data']
 
         palette_map = {v.real: k for k, v in palette.items()}
-
-        block_data_decoded = byte_to_int(block_data)
-        blocks = [palette_map[idx] for idx in block_data_decoded]
-
-    if version == 3:
-        blocks = nbt_data['Blocks']
-        palette = blocks['Palette']
-        block_data = blocks['Data']     # this is pre-decoding, values are in varint
-
-        palette_map = {v.real: k for k, v in palette.items()}
-
         block_data_decoded = byte_to_int(block_data)
         blocks = [palette_map[idx] for idx in block_data_decoded]
 
     return width, height, length, blocks
 
 
-def draw_layer(screen, blocks, width, length, layer, font, block_id=None, pos=None):
+def draw_layer(screen, blocks, width, length, layer, font, block_id=None, pos=None, is_old=False):
     screen.fill((255, 255, 255))
 
     for x in range(width):
@@ -51,38 +54,43 @@ def draw_layer(screen, blocks, width, length, layer, font, block_id=None, pos=No
             if 0 <= index < len(blocks):
                 block = blocks[index]
 
-                stupid, block_name = block.split(':')
-                if '[' in block_name:
-                    block_name, stupid = block_name.split('[')
+                if is_old:
+                    color = BlOCK_COLORS.get(block, (50, 50, 50))
+                else:
+                    stupid, block_name = block.split(':')
+                    if '[' in block_name:
+                        block_name, stupid = block_name.split('[')
+                    color = BlOCK_COLORS_FROM_NAMES.get(block_name, (50, 50, 50))
 
-                color = BlOCK_COLORS_FROM_NAMES.get(block_name, (50, 50, 50))
                 pygame.draw.rect(screen, color, (x * BLOCK_SIZE, z * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE))
 
-    for x in range(0, (width * BLOCK_SIZE) + BLOCK_SIZE, BLOCK_SIZE):
-        pygame.draw.line(screen, (100, 100, 100), (x, 0), (x, length * BLOCK_SIZE))
-    for z in range(0, (length * BLOCK_SIZE) + BLOCK_SIZE, BLOCK_SIZE):
-        pygame.draw.line(screen, (100, 100, 100), (0, z), (width * BLOCK_SIZE, z))
-
+    draw_grid(screen, width, length)
     draw_ruler(screen, length, width)
 
     text_position = 20
 
+    # Draw layer number
     if layer is not None:
         layer_text = font.render(f'Layer #{layer}', True, (30, 30, 30))
         screen.blit(layer_text, (BLOCK_SIZE, text_position))
         text_position += 20
 
+    # draw the name and parameters of the block under the cursor, and highlights the block
     if block_id is not None:
-        block_name, block_vars = get_block_name(block_id)
+        if is_old:
+            block_name = BLOCK_NAMES.get(block_id)
+        else:
+            block_name, block_vars = get_block_name(block_id)
 
         text_surface = font.render(f'Block: {block_name}', True, (30, 30, 30))
         screen.blit(text_surface, (BLOCK_SIZE, text_position))
         text_position += 20
 
-        for key, state in block_vars.items():
-            key_state_surface = font.render(f'{key}: {state}', True, (30, 30, 30))
-            screen.blit(key_state_surface, (BLOCK_SIZE, text_position))
-            text_position += 20
+        if not is_old:
+            for key, state in block_vars.items():
+                key_state_surface = font.render(f'{key}: {state}', True, (30, 30, 30))
+                screen.blit(key_state_surface, (BLOCK_SIZE, text_position))
+                text_position += 20
 
         # makes the highligted block under cursor
         point1 = ((pos[0] // BLOCK_SIZE) * BLOCK_SIZE, (pos[1] // BLOCK_SIZE) * BLOCK_SIZE)
@@ -95,6 +103,13 @@ def draw_layer(screen, blocks, width, length, layer, font, block_id=None, pos=No
         pygame.draw.line(screen, (255, 255, 255), point4, point1)
 
     pygame.display.flip()
+
+
+def draw_grid(screen, width, length):
+    for x in range(0, (width * BLOCK_SIZE) + BLOCK_SIZE, BLOCK_SIZE):
+        pygame.draw.line(screen, (100, 100, 100), (x, 0), (x, length * BLOCK_SIZE))
+    for z in range(0, (length * BLOCK_SIZE) + BLOCK_SIZE, BLOCK_SIZE):
+        pygame.draw.line(screen, (100, 100, 100), (0, z), (width * BLOCK_SIZE, z))
 
 
 def draw_ruler(screen, length, width):
@@ -176,6 +191,10 @@ def byte_to_int(data):
 
 def main():
     file_path = "schems/0201-house-e380.schem"
+    if ".schematic" in file_path:
+        is_old = True
+    else:
+        is_old = False
 
     w, h, l, bl = load_schem(file_path)
 
@@ -189,7 +208,7 @@ def main():
 
     layer = 0
     font = pygame.font.Font(None, 24)
-    draw_layer(screen, bl, w, l, layer, font)
+    draw_layer(screen, bl, w, l, layer, font, is_old=is_old)
 
     running = True
     while running:
@@ -201,11 +220,11 @@ def main():
                     layer += 1
                 elif event.key == pygame.K_DOWN and layer > 0:
                     layer -= 1
-                draw_layer(screen, bl, w, l, layer, font)
+                draw_layer(screen, bl, w, l, layer, font, is_old=is_old)
 
         mouse_pos = pygame.mouse.get_pos()
         block_id = get_block_at_cursor(mouse_pos, w, l, layer, bl)
-        draw_layer(screen, bl, w, l, layer, font, block_id, mouse_pos)
+        draw_layer(screen, bl, w, l, layer, font, block_id, mouse_pos, is_old=is_old)
 
     pygame.quit()
     sys.exit()
